@@ -1,0 +1,19 @@
+[package]
+name = "radial-store"
+description = "Settings stored as TOML in the user's roaming app data folder."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+directories = "6.0.0"
+radial-app = { version = "0.1.0", path = "../app" }
+radial-domain = { version = "0.1.0", path = "../domain" }
+thiserror = "2.0.21"
+toml = "1.1.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

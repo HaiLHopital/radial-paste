@@ -1,0 +1,13 @@
+[package]
+name = "radial-settings"
+description = "The settings window (egui)."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe = "0.37.0"
+radial-domain = { version = "0.1.0", path = "../domain" }

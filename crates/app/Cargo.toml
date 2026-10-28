@@ -1,0 +1,13 @@
+[package]
+name = "radial-app"
+description = "Use cases and ports: the menu's state machine and saving settings."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+radial-domain = { version = "0.1.0", path = "../domain" }
+thiserror = "2.0.21"

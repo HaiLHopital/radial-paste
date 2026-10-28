@@ -1,0 +1,13 @@
+[package]
+name = "radial-domain"
+description = "Snippets, settings, hotkey bindings and the radial menu's maths. No I/O."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
