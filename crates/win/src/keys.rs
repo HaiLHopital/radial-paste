@@ -2,13 +2,16 @@
 //! `unsafe`, and every mapping is unit-tested against raw key codes, so a change in the
 //! `windows` crate cannot silently break them.
 
-use radial_domain::{Key, Modifiers};
+use radial_domain::{Key, Modifiers, MouseButton};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_CONTROL, VK_F1, VK_MENU,
-    VK_OEM_3, VK_SHIFT, VK_SPACE,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_CONTROL, VK_F1,
+    VK_LBUTTON, VK_MBUTTON, VK_MENU, VK_OEM_3, VK_RBUTTON, VK_SHIFT, VK_SPACE, VK_XBUTTON1,
+    VK_XBUTTON2,
 };
 
-/// The virtual-key code of `key`, for `RegisterHotKey` and `GetAsyncKeyState`.
+/// The virtual-key code of `key`, for `RegisterHotKey` and `GetAsyncKeyState`. The mouse buttons
+/// have virtual keys too, and `GetAsyncKeyState` answers for them, so a mouse hotkey needs no
+/// other mapping.
 pub fn virtual_key(key: Key) -> u32 {
     match key {
         Key::Letter(c) => u32::from(c),
@@ -16,6 +19,13 @@ pub fn virtual_key(key: Key) -> u32 {
         Key::F(n) => u32::from(VK_F1.0) + u32::from(n) - 1,
         Key::Space => u32::from(VK_SPACE.0),
         Key::Backquote => u32::from(VK_OEM_3.0),
+        Key::Mouse(button) => match button {
+            MouseButton::Left => u32::from(VK_LBUTTON.0),
+            MouseButton::Right => u32::from(VK_RBUTTON.0),
+            MouseButton::Middle => u32::from(VK_MBUTTON.0),
+            MouseButton::Back => u32::from(VK_XBUTTON1.0),
+            MouseButton::Forward => u32::from(VK_XBUTTON2.0),
+        },
     }
 }
 
@@ -72,6 +82,15 @@ mod tests {
     fn maps_space_and_backquote() {
         assert_eq!(virtual_key(Key::Space), 0x20);
         assert_eq!(virtual_key(Key::Backquote), 0xC0);
+    }
+
+    #[test]
+    fn maps_mouse_buttons_to_their_virtual_keys() {
+        assert_eq!(virtual_key(Key::Mouse(MouseButton::Left)), 0x01);
+        assert_eq!(virtual_key(Key::Mouse(MouseButton::Right)), 0x02);
+        assert_eq!(virtual_key(Key::Mouse(MouseButton::Middle)), 0x04);
+        assert_eq!(virtual_key(Key::Mouse(MouseButton::Back)), 0x05);
+        assert_eq!(virtual_key(Key::Mouse(MouseButton::Forward)), 0x06);
     }
 
     #[test]

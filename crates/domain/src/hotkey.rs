@@ -13,6 +13,18 @@ pub struct Modifiers {
     pub alt: bool,
 }
 
+/// A mouse button, usable as the hotkey's key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    /// The first side button, usually "back".
+    Back,
+    /// The second side button, usually "forward".
+    Forward,
+}
+
 /// The key held down, with the modifiers, to open the menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -25,6 +37,8 @@ pub enum Key {
     Space,
     /// The `` ` `` key.
     Backquote,
+    /// A mouse button. The input adapter watches for its press; see `radial_win::input`.
+    Mouse(MouseButton),
 }
 
 impl Key {
@@ -33,13 +47,19 @@ impl Key {
             Key::Letter(c) => c.is_ascii_uppercase(),
             Key::Digit(d) => d <= 9,
             Key::F(n) => (1..=24).contains(&n),
-            Key::Space | Key::Backquote => true,
+            Key::Space | Key::Backquote | Key::Mouse(_) => true,
         }
     }
 
-    /// A key that types something needs Ctrl or Alt with it, or the hotkey would eat typing.
-    fn types_text(self) -> bool {
-        !matches!(self, Key::F(_))
+    /// A key that types something, or clicks something, needs Ctrl or Alt with it, or the hotkey
+    /// would fire on ordinary typing or clicking. The middle, back and forward buttons carry no
+    /// text and no ordinary click, so they may stand alone.
+    fn needs_ctrl_or_alt(self) -> bool {
+        match self {
+            Key::Mouse(button) => matches!(button, MouseButton::Left | MouseButton::Right),
+            Key::F(_) => false,
+            Key::Letter(_) | Key::Digit(_) | Key::Space | Key::Backquote => true,
+        }
     }
 }
 
@@ -51,6 +71,13 @@ impl fmt::Display for Key {
             Key::F(n) => write!(f, "F{n}"),
             Key::Space => f.write_str("Space"),
             Key::Backquote => f.write_str("`"),
+            Key::Mouse(button) => f.write_str(match button {
+                MouseButton::Left => "MouseLeft",
+                MouseButton::Right => "MouseRight",
+                MouseButton::Middle => "MouseMiddle",
+                MouseButton::Back => "MouseBack",
+                MouseButton::Forward => "MouseForward",
+            }),
         }
     }
 }
@@ -64,6 +91,11 @@ impl FromStr for Key {
         let key = match upper.as_str() {
             "SPACE" => Key::Space,
             "`" | "BACKQUOTE" => Key::Backquote,
+            "MOUSELEFT" => Key::Mouse(MouseButton::Left),
+            "MOUSERIGHT" => Key::Mouse(MouseButton::Right),
+            "MOUSEMIDDLE" => Key::Mouse(MouseButton::Middle),
+            "MOUSEBACK" => Key::Mouse(MouseButton::Back),
+            "MOUSEFORWARD" => Key::Mouse(MouseButton::Forward),
             _ => {
                 let mut chars = upper.chars();
                 match (chars.next(), chars.as_str()) {
@@ -102,7 +134,7 @@ pub enum HotkeyError {
     MissingKey,
     #[error("the Windows key cannot be part of the hotkey")]
     WinKey,
-    #[error("`{0}` types text, so it needs Ctrl or Alt with it")]
+    #[error("`{0}` needs Ctrl or Alt with it")]
     NeedsCtrlOrAlt(String),
 }
 
@@ -111,7 +143,7 @@ impl HotkeyBinding {
         if !key.is_valid() {
             return Err(HotkeyError::UnknownKey(key.to_string()));
         }
-        if key.types_text() && !(modifiers.ctrl || modifiers.alt) {
+        if key.needs_ctrl_or_alt() && !(modifiers.ctrl || modifiers.alt) {
             return Err(HotkeyError::NeedsCtrlOrAlt(key.to_string()));
         }
         Ok(Self { modifiers, key })
@@ -230,6 +262,44 @@ mod tests {
             Err(HotkeyError::NeedsCtrlOrAlt("Space".into()))
         );
         assert!(parse("Ctrl+Q").is_ok());
+    }
+
+    #[test]
+    fn mouse_buttons_parse_and_round_trip() {
+        assert_eq!(
+            parse("mouseback").unwrap().key(),
+            Key::Mouse(MouseButton::Back)
+        );
+        assert_eq!(
+            parse("Ctrl + MouseForward").unwrap().to_string(),
+            "Ctrl+MouseForward"
+        );
+        assert_eq!(parse("MouseMiddle").unwrap().to_string(), "MouseMiddle");
+        assert_eq!(
+            parse("Mouse4"),
+            Err(HotkeyError::UnknownKey("Mouse4".into()))
+        );
+    }
+
+    #[test]
+    fn middle_back_and_forward_may_stand_alone() {
+        let none = Modifiers::default();
+        for button in [MouseButton::Middle, MouseButton::Back, MouseButton::Forward] {
+            assert!(HotkeyBinding::new(none, Key::Mouse(button)).is_ok());
+        }
+    }
+
+    #[test]
+    fn left_and_right_clicks_need_ctrl_or_alt() {
+        assert_eq!(
+            parse("MouseLeft"),
+            Err(HotkeyError::NeedsCtrlOrAlt("MouseLeft".into()))
+        );
+        assert_eq!(
+            parse("Shift+MouseRight"),
+            Err(HotkeyError::NeedsCtrlOrAlt("MouseRight".into()))
+        );
+        assert!(parse("Ctrl+MouseLeft").is_ok());
     }
 
     #[test]

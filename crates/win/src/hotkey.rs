@@ -4,6 +4,10 @@
 //! registered on the input thread only: that thread's message loop receives the `WM_HOTKEY`.
 //! The snippet hotkey switches between two ids, and a new binding is registered before the old
 //! one is let go, so that a failure leaves the old hotkey working.
+//!
+//! A mouse button cannot be registered, so for a [`Key::Mouse`] binding nothing is registered:
+//! the current keyboard hotkey is still let go, and the input thread watches for the press
+//! instead (`crate::input`).
 
 use windows::Win32::Foundation::ERROR_HOTKEY_ALREADY_REGISTERED;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -12,7 +16,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::core::HRESULT;
 
 use radial_app::ports::HotkeyRegistrar;
-use radial_domain::HotkeyBinding;
+use radial_domain::{HotkeyBinding, Key};
 
 use crate::keys;
 
@@ -38,34 +42,42 @@ pub struct Hotkeys {
     current: Option<HotkeyBinding>,
 }
 
-impl Hotkeys {
-    pub fn current(&self) -> Option<HotkeyBinding> {
-        self.current
-    }
-}
-
 impl HotkeyRegistrar for Hotkeys {
     type Error = HotkeyError;
 
     fn register(&mut self, binding: HotkeyBinding) -> Result<(), Self::Error> {
+        let mouse = matches!(binding.key(), Key::Mouse(_));
         let next = if self.slot == HOTKEY_ID {
             OTHER_HOTKEY_ID
         } else {
             HOTKEY_ID
         };
-        // Register the new binding before letting go of the old one: if this fails, the old
-        // hotkey keeps working.
-        register_raw(
-            next,
-            keys::register_modifiers(binding.modifiers()),
-            keys::virtual_key(binding.key()),
-        )?;
-        if self.current.is_some() {
+        if !mouse {
+            // Register the new binding before letting go of the old one: if this fails, the old
+            // hotkey keeps working.
+            register_raw(
+                next,
+                keys::register_modifiers(binding.modifiers()),
+                keys::virtual_key(binding.key()),
+            )?;
+        }
+        // A mouse-button binding has nothing registered, so there is also no old registration to
+        // let go of if the current binding is one.
+        let registered = self
+            .current
+            .is_some_and(|old| !matches!(old.key(), Key::Mouse(_)));
+        if registered {
             unregister_raw(self.slot);
         }
-        self.slot = next;
+        if !mouse {
+            self.slot = next;
+        }
         self.current = Some(binding);
-        log::info!("registered the hotkey {binding}");
+        if mouse {
+            log::info!("watching for the hotkey {binding} on the mouse");
+        } else {
+            log::info!("registered the hotkey {binding}");
+        }
         Ok(())
     }
 

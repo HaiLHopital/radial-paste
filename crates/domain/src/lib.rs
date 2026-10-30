@@ -7,5 +7,5 @@ mod hotkey;
 mod layout;
 
 pub use config::{CONFIG_VERSION, Config, ConfigError, MAX_LABEL_CHARS, MAX_SNIPPETS, Snippet};
-pub use hotkey::{HotkeyBinding, HotkeyError, Key, Modifiers};
+pub use hotkey::{HotkeyBinding, HotkeyError, Key, Modifiers, MouseButton};
 pub use layout::{Layout, Rect, Vec2, place};

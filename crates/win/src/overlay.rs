@@ -11,12 +11,13 @@ use std::f32::consts::PI;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::last_error;
 use ab_glyph::{Font, FontRef, GlyphId, OutlineCurve, PxScale, PxScaleFactor, ScaleFont};
 use radial_app::ports::{MenuPresenter, Placement};
 use radial_domain::{Layout, Rect, Snippet, Vec2, place};
 use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Shader, Stroke, Transform};
 use windows::Win32::Foundation::{
-    COLORREF, GetLastError, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
+    COLORREF, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
@@ -32,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     UpdateLayeredWindow, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::core::{Error as WinError, HRESULT, HSTRING, PCWSTR};
+use windows::core::{Error as WinError, HSTRING, PCWSTR};
 
 /// The system UI font. Without it the ring is drawn without labels (open decision 4).
 const FONT_PATH: &str = "C:\\Windows\\Fonts\\segoeui.ttf";
@@ -91,12 +92,6 @@ extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LP
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// The calling thread's last error, as a typed error.
-fn last_error() -> WinError {
-    // SAFETY: just reads the thread's last error code.
-    WinError::from_hresult(HRESULT::from_win32(unsafe { GetLastError() }.0))
-}
-
 /// Registers the window class once. Called on the input thread, the only thread that creates
 /// the window.
 fn register_class() -> Result<(), OverlayError> {
@@ -106,10 +101,13 @@ fn register_class() -> Result<(), OverlayError> {
     }
     // SAFETY: `None` asks for this executable's module handle, which always exists.
     let module: HMODULE = unsafe { GetModuleHandleW(None) }?;
+    // The class name buffer must outlive the call, which only reads it: the `HSTRING` is bound
+    // to a local, not chained into the pointer, so that it cannot be dropped early.
+    let class_name = HSTRING::from(CLASS_NAME);
     let class = WNDCLASSW {
         lpfnWndProc: Some(overlay_proc),
         hInstance: HINSTANCE(module.0),
-        lpszClassName: PCWSTR::from_raw(HSTRING::from(CLASS_NAME).as_ptr()),
+        lpszClassName: PCWSTR::from_raw(class_name.as_ptr()),
         ..Default::default()
     };
     // SAFETY: `class` and the class name it points at live through the call, which only reads
@@ -123,14 +121,16 @@ fn register_class() -> Result<(), OverlayError> {
 
 fn create_window() -> Result<HWND, OverlayError> {
     register_class()?;
-    let class_name = PCWSTR::from_raw(HSTRING::from(CLASS_NAME).as_ptr());
+    // As in `register_class`: the buffer must outlive the call below.
+    let class_name = HSTRING::from(CLASS_NAME);
+    let name = PCWSTR::from_raw(class_name.as_ptr());
     // SAFETY: the class is registered above; the zero size is fine because `UpdateLayeredWindow`
     // sizes and positions the window on every `show`; with no parent this is a top-level window.
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            class_name,
-            class_name,
+            name,
+            name,
             WS_POPUP,
             0,
             0,
