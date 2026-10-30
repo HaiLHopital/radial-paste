@@ -16,10 +16,10 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 /// The value's name, recognizable next to the other entries.
 const VALUE_NAME: &str = "radial-paste";
 
-/// An error from the Run key, naming the operation that failed.
+/// An error from the autostart key, naming the operation that failed.
 #[derive(Debug, thiserror::Error)]
 pub enum AutostartError {
-    #[error("could not open the registry Run key: {0}")]
+    #[error("could not open the autostart registry key: {0}")]
     Open(WinError),
     #[error("could not write the autostart entry: {0}")]
     Set(WinError),
@@ -42,7 +42,15 @@ fn command_line(exe: &Path) -> String {
 /// Points the Run key at `exe`, or removes the entry again. A missing entry is exactly what
 /// `false` wants, so removing one never fails on that account.
 pub fn set(enabled: bool, exe: &Path) -> Result<(), AutostartError> {
-    let wide_key = wide(RUN_KEY);
+    set_in(RUN_KEY, enabled, exe)
+}
+
+/// Opens `key_path` under `HKCU`, writes or removes the value, closes the key. Split off from
+/// [`set`] only so that the test can run against a scratch key: some environments (GitHub's
+/// runner images, for one) keep policies on the real Run key, and a test has no business
+/// touching a key with OS meaning anyway.
+fn set_in(key_path: &str, enabled: bool, exe: &Path) -> Result<(), AutostartError> {
+    let wide_key = wide(key_path);
     let mut key = HKEY::default();
     // SAFETY: `key` is an out parameter; the handle it receives is closed below.
     let opened = unsafe {
@@ -96,10 +104,7 @@ pub fn set(enabled: bool, exe: &Path) -> Result<(), AutostartError> {
     // SAFETY: the handle came from the successful open above and is used by nothing else.
     let closed = unsafe { RegCloseKey(key) };
     if closed != ERROR_SUCCESS {
-        log::warn!(
-            "could not close the registry Run key: {}",
-            win32_error(closed)
-        );
+        log::warn!("could not close the registry key: {}", win32_error(closed));
     }
     outcome
 }
@@ -112,7 +117,13 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Registry::{KEY_QUERY_VALUE, REG_VALUE_TYPE, RegQueryValueExW};
+    use windows::Win32::System::Registry::{
+        KEY_QUERY_VALUE, REG_OPTION_NON_VOLATILE, REG_VALUE_TYPE, RegCreateKeyExW, RegDeleteTreeW,
+        RegQueryValueExW,
+    };
+
+    /// A key of our own to run the writes against, under `HKCU`.
+    const SCRATCH_KEY: &str = "Software\\radial-paste-test";
 
     #[test]
     fn the_command_line_is_quoted() {
@@ -128,29 +139,65 @@ mod tests {
         );
     }
 
-    /// This one touches the real per-user Run key: it writes the entry under the value name
-    /// the app uses and removes it again, leaving the key as it was. Worth more than a fake
-    /// registry, because the whole point is that Windows reads this exact spot at login.
+    /// Writes into the scratch key and removes the entry again, exercising the exact calls the
+    /// real Run key goes through without touching a key whose removal any policy could resent.
+    /// The scratch key is deleted afterwards, so CI leaves no state behind.
     #[test]
-    fn set_and_unset_write_the_real_run_key() {
+    fn set_and_unset_write_and_remove_the_entry() {
+        create_scratch_key();
         let exe = Path::new("C:\\some day\\radial-paste.exe");
 
-        set(true, exe).unwrap();
-        let written = read_value().unwrap();
+        set_in(SCRATCH_KEY, true, exe).unwrap();
+        let written = read_value(SCRATCH_KEY).unwrap();
         assert_eq!(written.as_deref(), Some(command_line(exe).as_str()));
 
-        set(false, exe).unwrap();
-        assert_eq!(read_value().unwrap(), None);
+        set_in(SCRATCH_KEY, false, exe).unwrap();
+        assert_eq!(read_value(SCRATCH_KEY).unwrap(), None);
 
         // Removing a missing entry is not an error, and leaves nothing behind.
-        set(false, exe).unwrap();
-        assert_eq!(read_value().unwrap(), None);
+        set_in(SCRATCH_KEY, false, exe).unwrap();
+        assert_eq!(read_value(SCRATCH_KEY).unwrap(), None);
+
+        delete_scratch_key();
     }
 
-    /// The value as it sits in the key, read back with the same calls `set` uses, or `None`
+    /// Creates the scratch key; a leftover from an earlier crashed run is fine, the key is
+    /// opened with `RegCreateKeyExW` either way.
+    fn create_scratch_key() {
+        let wide_key = wide(SCRATCH_KEY);
+        let mut key = HKEY::default();
+        // SAFETY: `key` is an out parameter, and the handle is closed before the test ends.
+        let created = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR::from_raw(wide_key.as_ptr()),
+                None,
+                PCWSTR::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE | KEY_QUERY_VALUE,
+                None,
+                &mut key,
+                None,
+            )
+        };
+        assert_eq!(created, ERROR_SUCCESS, "the scratch key must be creatable");
+        // SAFETY: the handle came from the successful create above.
+        let _ = unsafe { RegCloseKey(key) };
+    }
+
+    /// Removes the scratch key and everything in it.
+    fn delete_scratch_key() {
+        let wide_key = wide(SCRATCH_KEY);
+        // SAFETY: only names our own scratch key for removal.
+        let deleted =
+            unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR::from_raw(wide_key.as_ptr())) };
+        assert_eq!(deleted, ERROR_SUCCESS, "the scratch key must be removable");
+    }
+
+    /// The value as it sits in the key, read back with the same calls `set_in` uses, or `None`
     /// when it is not there.
-    fn read_value() -> Result<Option<String>, AutostartError> {
-        let wide_key = wide(RUN_KEY);
+    fn read_value(key_path: &str) -> Result<Option<String>, AutostartError> {
+        let wide_key = wide(key_path);
         let mut key = HKEY::default();
         // SAFETY: `key` is an out parameter; the handle is closed before returning.
         let opened = unsafe {
@@ -190,10 +237,6 @@ mod tests {
         if read != ERROR_SUCCESS {
             return Err(AutostartError::Remove(win32_error(read)));
         }
-        assert_eq!(
-            kind, REG_SZ,
-            "the test wrote the value itself; it is a string"
-        );
         assert_eq!(
             kind, REG_SZ,
             "the test wrote the value itself; it is a string"

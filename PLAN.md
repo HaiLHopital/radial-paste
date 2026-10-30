@@ -33,7 +33,7 @@ M1 through M5 are done. The app is a resident background process: it lives in th
 
 Verified on 2026-10-28:
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` are clean.
-- `cargo test --workspace` passes 64 tests: 25 in domain, 15 in app, 16 in win (6 `keys`, 5 overlay helpers, 3 UTF-16/CRLF, 2 `autostart`), 2 in settings, 2 in the desktop's logging module, 4 in store. One `autostart` test writes and removes the real per-user Run key.
+- `cargo test --workspace` passes 64 tests: 25 in domain, 15 in app, 16 in win (6 `keys`, 5 overlay helpers, 3 UTF-16/CRLF, 2 `autostart`), 2 in settings, 2 in the desktop's logging module, 4 in store. One `autostart` test writes and removes the entry in a scratch key under `HKCU\Software\radial-paste-test` and deletes it afterwards - the real Run key is left alone, because GitHub's runner keeps policies on it that the first CI run tripped over.
 - `cargo check --release` builds the release-only code paths (file logger, glow). The icon and manifest are confirmed inside the built exe: `ExtractAssociatedIcon` extracts a 32x32 icon, and the bytes carry `PerMonitorV2`, `asInvoker` and the Common-Controls dependency.
 - The resident was smoke-tested live on 2026-10-29: one process stays in the tray with no window; a second launch exits and makes the resident spawn a `--settings` child; with `autostart = false` the Run key correctly carries no entry. What still needs human eyes: the tray menu itself (Settings…, Pause, Quit), double-click, the hotkey surviving a settings save, and the manual matrices from M3 (terminals and elevated windows are expected failures, tap-then-click, Esc, the ring's looks) plus a mouse-button hotkey end to end.
 
@@ -235,7 +235,7 @@ Done, on the recommended two-process split (open decision 1 settled):
 - ~~Message-only window~~ Done: `radial_win::host::run_host` creates it on the resident's main thread (not the input thread, as the plan guessed — the tray wants that thread too), receives `radial-paste.reload` and `radial-paste.open-settings`, and its loop doubles as the pump for the tray's event channels.
 - ~~Tray~~ Done: `radial_win::tray` (tray-icon 0.26 + its bundled muda) with Settings…, Pause (checkbox → `Event::SetPaused`), separator, Quit. Quit ends the input thread and the host loop. Double-click opens settings; the menu is right-click only (`with_menu_on_left_click(false)`). The icon comes from the exe's resource (id 1, embedded by M5's winresource) with a hand-drawn fallback.
 - ~~Settings mode (`--settings`)~~ Done: the save closure writes the file and posts `reload`. Works with or without a resident; without one only the file is written.
-- ~~Autostart~~ Done: `radial_win::autostart::set` writes/removes `HKCU\...\Run` value `radial-paste` (quoted exe path, REG_SZ), applied on load and on every reload; integration-tested against the real key. The checkbox label no longer says "not wired up yet".
+- ~~Autostart~~ Done: `radial_win::autostart::set` writes/removes `HKCU\...\Run` value `radial-paste` (quoted exe path, REG_SZ), applied on load and on every reload; the write/remove/remove-missing sequence is tested against a scratch key (`HKCU\Software\radial-paste-test`, deleted after the test) because the first CI run showed that the runner's policies resent the real Run key being touched. The checkbox label no longer says "not wired up yet".
 
 Deviations and leftovers:
 - **No tray balloon** for a failed hotkey change; errors are still only logged.
