@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+env_filter = "2.0"
 env_logger = "0.11.11"
 log = "0.4.34"
 radial-app = { version = "0.1.0", path = "../app" }
@@ -16,3 +17,6 @@ radial-domain = { version = "0.1.0", path = "../domain" }
 radial-settings = { version = "0.1.0", path = "../settings" }
 radial-store = { version = "0.1.0", path = "../store" }
 radial-win = { version = "0.1.0", path = "../win" }
+
+[build-dependencies]
+winresource = "0.1.34"

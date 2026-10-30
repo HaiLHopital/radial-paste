@@ -6,7 +6,7 @@ Windows 10 and 11 only.
 
 ## Status
 
-Work in progress, milestones M1 and M2 done. The model, the menu's state machine, the TOML settings file, the settings window, the global hotkey, the input loop and the radial overlay work and are tested. The paste adapter is still a stub that logs what it would do; its module doc lists the Win32 calls that will replace it.
+Work in progress. Milestones M1 through M3 and M5 are done; M4 (tray, single instance, autostart) is next. The model, the menu's state machine, the TOML settings file, the settings window, the global hotkey, the input loop, the radial overlay and the clipboard paste all work and are tested. The hotkey can be recorded by pressing it in the settings window, and mouse buttons can be the hotkey's key. Release builds carry an icon, a manifest (Per-Monitor V2 DPI, `asInvoker`, Common Controls), file logging under `%LOCALAPPDATA%\radial-paste\logs`, and CI runs the checks on GitHub Actions.
 
 ## Scope
 
@@ -21,7 +21,7 @@ Work in progress, milestones M1 and M2 done. The model, the menu's state machine
 - More than 8 snippets, as a second ring or pages.
 - Typing the text with `SendInput` as a second way to paste.
 - Placeholders such as `{date}` and `{clipboard}`.
-- Opening the menu with a mouse button.
+- Swallowing the mouse-button hotkey's press, which currently also reaches the focused app (needs a low-level hook, so it will not happen lightly).
 
 **Out of scope:** any server or sync, other operating systems, nested menus, rich text.
 
@@ -36,15 +36,15 @@ Hexagonal, as a Cargo workspace:
 | `crates/store` (`radial-store`) | `ConfigRepository` stored as TOML. |
 | `crates/win` (`radial-win`) | Windows adapters and the input thread. |
 | `crates/settings` (`radial-settings`) | The egui settings window. |
-| `crates/desktop` (`radial-paste`) | The binary and composition root. |
+| `crates/desktop` (`radial-paste`) | The binary and composition root: it also embeds the icon and the manifest and installs the release file logger. |
 
 The input thread owns the hotkey, the overlay and the `Core`. It feeds the core `Event`s: `HotkeyPressed`, and `Tick`s that sample the cursor and the keys every 10 ms while the menu is up. The settings window runs on the main thread and sends `ConfigChanged` over a channel.
 
 Key decisions:
-- **The key is polled, not hooked.** `RegisterHotKey` reports the key going down. While the menu is up, `GetAsyncKeyState` polling detects the release. There is no `WH_KEYBOARD_LL` hook, because antivirus software flags hooks as keylogger behaviour.
+- **The key is polled, not hooked.** `RegisterHotKey` reports the key going down. While the menu is up, `GetAsyncKeyState` polling detects the release. There is no `WH_KEYBOARD_LL` hook, because antivirus software flags hooks as keylogger behaviour. A mouse button cannot be registered, so the input thread polls for its press while idle; the press is not swallowed, which is why the middle, back and forward buttons are the sane picks.
 - **The overlay never takes focus** (`WS_EX_NOACTIVATE`), so the target app keeps it and there is nothing to restore. Esc is registered as a temporary hotkey while the menu is up.
 - **Paste waits for the modifiers to be released** (up to `modifier_release_timeout_ms`), so Ctrl+V is not received as Ctrl+Shift+V.
-- **The Win key cannot be part of the hotkey**, and keys that type text need Ctrl or Alt. The default is `Ctrl+Shift+Space`; plain `Ctrl+Space` is taken by IDEs and input methods.
+- **The Win key cannot be part of the hotkey**, and keys that type text need Ctrl or Alt. Mouse buttons may be the key: the middle, back and forward buttons may stand alone, the left and right buttons need Ctrl or Alt. The default is `Ctrl+Shift+Space`; plain `Ctrl+Space` is taken by IDEs and input methods.
 - **`serde` derives live in the domain**, to avoid duplicating every type as a DTO. The file format (TOML) is chosen only in `store`.
 
 ## Known issues to design for
@@ -60,10 +60,23 @@ Key decisions:
 Prerequisites: Rust stable (edition 2024).
 
 ```powershell
-cargo run -p radial-paste                 # settings window; the paste stub logs to the console
+cargo run -p radial-paste                 # settings window; hold Ctrl+Shift+Space, flick, and it pastes
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Set `RUST_LOG=debug` for more output.
+Set `RUST_LOG=debug` for more output. Debug builds log to the console; release builds log one file per run under `%LOCALAPPDATA%\radial-paste\logs`, keeping the five newest. If `config.toml` fails to load, a copy is kept as `config.toml.bad` beside it before the defaults take over.
+
+The settings window uses eframe with the glow renderer; the icon and the manifest are embedded by `crates/desktop/build.rs` (winresource) from `crates/desktop/assets/`, where `make-icon.ps1` regenerates the icon.
+
+## Packaging
+
+`wix/main.wxs` describes a per-user MSI. Building it needs the WiX 3.x toolset, which is not part of the repo:
+
+```powershell
+cargo install cargo-wix
+cargo wix          # builds target/release/wix/radial-paste-*.msi
+```
+
+Neither the MSI nor the exe is code-signed yet; unsigned binaries trip SmartScreen, and antivirus heuristics watch `SendInput`. Sign both with `signtool` once a certificate exists.

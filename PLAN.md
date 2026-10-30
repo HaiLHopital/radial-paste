@@ -20,7 +20,7 @@ A Windows tray app. You hold a global hotkey and a ring of up to 8 text snippets
 | Paste | Clipboard + Ctrl+V, then restore the clipboard and keep the text out of Win+V history. The user doesn't mind clobbering the clipboard for now; restoring it is a nicety. |
 | Snippets | Up to 8 in one ring (`MAX_SNIPPETS`). More later as a second ring or pages, never nested menus. |
 | Labels | Separate from the text, at most 24 characters (`MAX_LABEL_CHARS`). |
-| Hotkey rules | The Win key isn't allowed. Keys that type text (letters, digits, Space, `` ` ``) need Ctrl or Alt. F1–F24 may stand alone. Default is `Ctrl+Shift+Space`, since `Ctrl+Space` is taken by IDEs and input methods. |
+| Hotkey rules | The Win key isn't allowed. Keys that type text (letters, digits, Space, `` ` ``) need Ctrl or Alt. F1–F24 may stand alone. Mouse buttons may be the key too: Middle, Back and Forward may stand alone, Left and Right need Ctrl or Alt (they would fire on every click). A mouse hotkey cannot be registered, so the input thread polls for its press; the press is **not swallowed** and also reaches the focused app, which is why Middle/Back/Forward are the sane picks. Default is `Ctrl+Shift+Space`, since `Ctrl+Space` is taken by IDEs and input methods. |
 | Wait before paste | After a pick, wait until the hotkey's modifiers are up (`modifier_release_timeout_ms`, default 300), so Ctrl+V doesn't arrive as Ctrl+Shift+V. |
 | Architecture | Hexagonal Cargo workspace (see §4). `serde` derives live in the domain; only `store` chooses TOML. |
 | Settings file | `%APPDATA%\radial-paste\config.toml`, written atomically (temp file + rename), with a `version` field (currently 1). |
@@ -29,40 +29,39 @@ A Windows tray app. You hold a global hotkey and a ring of up to 8 text snippets
 
 ## 3. Current state
 
-M1 and M2 are done: the hotkey, the input loop and the overlay are real. Nothing is committed: the repo is on `main`, freshly `git init`'d, and every file is untracked.
+M1, M2 and M3 are done: hotkey, input loop, overlay and paste are all real. On top of that, the settings window can record the hotkey by pressing it, and mouse buttons work as the hotkey's key (polled in watch mode, no hook). M5 (polish and shipping) is also done, at the user's call to skip ahead of M4: manifest + icon, release file logging, the `config.toml.bad` backup, eframe on glow, a CI workflow and an MSI template. The two code reviews from the same day are applied (see §6, M3 and M5). Committed so far: `79accd8 feat: initial workspace through milestone M2`; everything since is not committed yet.
 
 Verified on 2026-10-28:
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` are clean.
-- `cargo test --workspace` passes 51 tests: 22 in domain, 15 in app, 10 in win (5 `keys` mappings, 5 overlay helpers), 4 in store.
-- An injected hold-flick-release (`smoke.ps1`) ran the whole path on a real screen: `registered the hotkey Ctrl+Shift+Space`, `showing 4 wedges at (167, 467), scale 1`, `highlighting Some(1)`, `hiding the menu`, `stub: would paste 43 characters`. What still needs human eyes: the ring looks right, tap-then-click, Esc, a hotkey another app holds.
+- `cargo test --workspace` passes 62 tests: 25 in domain, 15 in app, 14 in win (6 `keys`, 5 overlay helpers, 3 UTF-16/CRLF), 2 in settings, 2 in the desktop's logging module, 4 in store.
+- `cargo check --release` builds the release-only code paths (file logger, glow). The icon and manifest are confirmed inside the built exe: `ExtractAssociatedIcon` extracts a 32x32 icon, and the bytes carry `PerMonitorV2`, `asInvoker` and the Common-Controls dependency.
+- An injected hold-flick-release (`smoke.ps1`) with Notepad focused pasted the picked snippet into it and sent Ctrl+V for real. The clipboard was NOT restored in that run: the sequence number moved 115 → 118 within the 100 ms read delay, so something on this machine rewrites the clipboard after a paste (a clipboard manager or an OS service). The guard treated it as a foreign write and left the snippet on the clipboard, which matches the recorded decision that a clobbered clipboard is acceptable. What still needs human eyes: the manual matrix in M3 step 8 (terminals and elevated windows are expected failures), tap-then-click, Esc, the ring's looks, and whether the clipboard restores on a quieter machine or after identifying the writer. Not yet tried by a human: a mouse-button hotkey end to end (set `hotkey = "MouseBack"` in the settings window and hold-flick-release), and the looks of the app icon.
 
 Toolchain at the time:
 - Rust 1.99, edition 2024, resolver 3.
-- `windows` **0.62**: failure-reporting calls return `Result`; `GetMessageW`/`PeekMessageW`/`ShowWindow` return `BOOL` with `.as_bool()`/`.ok()`; `GetAsyncKeyState` takes `i32`; `VK_*` are `VIRTUAL_KEY(u16)`; for a thread timer (`hwnd = NULL`) `SetTimer` generates its own id and `KillTimer` needs that returned id.
+- `windows` **0.62**: failure-reporting calls return `Result`; `GetMessageW`/`PeekMessageW`/`ShowWindow` return `BOOL` with `.as_bool()`/`.ok()`; `GetAsyncKeyState` takes `i32`; `VK_*` are `VIRTUAL_KEY(u16)`; for a thread timer (`hwnd = NULL`) `SetTimer` generates its own id and `KillTimer` needs that returned id; `CF_*` are `CLIPBOARD_FORMAT(u16)` while the clipboard API takes `u32`; `GetClipboardData` returns `Result<HANDLE>`; `GlobalUnlock` returns `Result<()>`.
 - `tiny-skia` **0.11.4**: `fill_path`/`stroke_path` take `(path, paint, [stroke,] Transform, Option<&Mask>)`; cubic curves are `PathBuilder::cubic_to`; data is premultiplied RGBA.
 - `ab_glyph` **0.2.32**: `Font::outline(GlyphId) -> Option<Outline>` gives unscaled, unpositioned `OutlineCurve`s; metrics come via `as_scaled(PxScale)` + the `ScaleFont` trait.
-- eframe/egui **0.37**: `eframe::App::ui(&mut self, ui: &mut egui::Ui, frame)` replaces `update`, `egui::Panel::bottom(id).show(ui, ..)` replaces `TopBottomPanel`, `CentralPanel::show` takes a `&mut Ui`.
+- eframe/egui **0.37**: `eframe::App::ui(&mut self, ui: &mut egui::Ui, frame)` replaces `update`, `egui::Panel::bottom(id).show(ui, ..)` replaces `TopBottomPanel`, `CentralPanel::show` takes a `&mut Ui`. Now on `default-features = false, features = ["default_fonts", "glow"]`; the default wgpu renderer is gone from the tree, and the `wgpu_hal=off` log filter with it.
 - toml 1.x, thiserror 2, directories 6, tempfile 3.
 
 What works:
 - Domain model, validation, wedge maths, `Rect` + `place` (edge clamping), `Vec2 / f64` scaling.
 - The `Core` state machine, dividing cursor offsets by the `Placement`'s scale before `pick`/`contains`.
 - The TOML store.
-- The settings window: edit, reorder, add and delete snippets; hotkey text with live validation and a warning for Alt; dead zone, radius and modifier wait; Save and Revert.
+- The settings window: edit, reorder, add and delete snippets; hotkey text with live validation, a warning for Alt, and a **Record keys…** button that captures the next key press or held mouse button (Esc cancels, a 250 ms arming guard swallows the click on the button, invalid combos are written as just the key so the hint explains what is missing); dead zone, radius and modifier wait; Save and Revert.
 - Saving from the settings window sends `Event::ConfigChanged` to the input thread.
-- The hotkey: registered on the input thread, a new binding on id 1/2 before the old one is dropped, `AlreadyRegistered` typed for 1409; Esc on id 3 only while the menu is up.
-- The input thread: a `GetMessageW` loop woken by `PostThreadMessageW`; a 10 ms `SetTimer` while `wants_ticks` samples cursor, hotkey key, modifiers and the primary button (`SM_SWAPBUTTON`) into `Tick` and `Click`; `InputHandle::quit` posts `WM_QUIT`.
-- The overlay: a `WS_EX_LAYERED | WS_EX_NOACTIVATE` window on the input thread, never taking focus (`WM_MOUSEACTIVATE` → `MA_NOACTIVATE`, `SW_SHOWNOACTIVATE`); monitor work area via `GetMonitorInfoW`, scale via `GetDpiForMonitor`, drawing with tiny-skia (disc, wedges, separators, dead-zone and rim circles, labels in Segoe UI via ab_glyph, cut to the wedge's chord), upload with `UpdateLayeredWindow` over a `CreateDIBSection` BGRA buffer; the process is Per-Monitor V2 DPI aware from the first line of `main`.
-
-What is a stub (it logs and does nothing):
-- `radial_win::inject::ClipboardPaste`
+- The hotkey: registered on the input thread, a new binding on id 1/2 before the old one is dropped, `AlreadyRegistered` typed for 1409; Esc on id 3 only while the menu is up. A `Key::Mouse(_)` binding registers nothing: the old keyboard hotkey is still released, and the input thread watches for the press.
+- The input thread: a `GetMessageW` loop woken by `PostThreadMessageW`; a 10 ms `SetTimer` while `wants_ticks` or while a mouse-button hotkey is watched (started once before the loop blocks, since no message would arrive), sampling cursor, hotkey key, modifiers and the primary button (`SM_SWAPBUTTON`) into `Tick` and `Click`; in watch mode (idle + mouse hotkey + not paused) each tick samples the combo and opens the menu on its down-edge; `InputHandle::quit` posts `WM_QUIT`.
+- The overlay: a `WS_EX_LAYERED | WS_EX_NOACTIVATE` window on the input thread, never taking focus; monitor work area, DPI scale, tiny-skia drawing with labels, `UpdateLayeredWindow`; the process is Per-Monitor V2 DPI aware from the first line of `main`.
+- The paste: clipboard save (every `HGLOBAL` format except the GDI ones), `CF_UNICODETEXT` in UTF-16 with CRLF, the three registered exclusion formats (no Win+V history, no cloud clipboard), retrying open with an RAII close, `SendInput` Ctrl+V counting 4 of 4, sequence-number-checked restore after 100 ms.
 
 Known gaps:
 - No tray icon. Closing the settings window quits (via `InputHandle::quit`).
 - `autostart` is stored but not applied.
 - Hotkey registration errors are only logged.
-- egui uses its default wgpu renderer, which is heavy and builds slowly.
-- The overlay has only been seen through logs and an automated flick; nobody has judged the drawing yet (ring geometry, label fit, highlight colour, multi-DPI).
+- The MSI has never been built on this machine (no WiX toolset), and nothing is code-signed.
+- The overlay's looks, the app icon and the paste matrix have only been checked by the injected smoke script, not by a human at the keyboard.
 
 ## 4. Code map
 
@@ -71,8 +70,10 @@ Cargo.toml            workspace; lints: clippy unwrap_used/expect_used = warn (a
 crates/domain/      radial-domain: pure, forbid(unsafe)
   config.rs           Config{version, hotkey, modifier_release_timeout_ms, autostart, layout, snippets(#[serde(rename="snippet")])}
                       Snippet{label,text}; validate() -> ConfigError; CONFIG_VERSION, MAX_SNIPPETS, MAX_LABEL_CHARS
-  hotkey.rs           Modifiers{ctrl,shift,alt}; Key{Letter,Digit,F,Space,Backquote}; HotkeyBinding (valid by construction,
-                      FromStr/Display "Ctrl+Shift+Space", serde as string); HotkeyError
+  hotkey.rs           Modifiers{ctrl,shift,alt}; MouseButton{Left,Right,Middle,Back,Forward};
+                      Key{Letter,Digit,F,Space,Backquote,Mouse(MouseButton)}; HotkeyBinding (valid by construction,
+                      FromStr/Display "Ctrl+Shift+Space" / "Ctrl+MouseBack", serde as string); HotkeyError
+                      (letters/digits/Space/Backquote and Mouse::Left/Right need Ctrl or Alt)
   layout.rs           Vec2 (Sub, Div<f64>); Layout{dead_zone,radius} in logical 96-DPI pixels: pick(count, offset)
                       (wedge 0 at 12 o'clock, clockwise), contains(offset), label_offset(count, i), is_valid();
                       Rect + place(cursor, area, radius) moves the centre inward, never panics
@@ -86,28 +87,43 @@ crates/app/           radial-app: depends on domain only, forbid(unsafe)
   settings.rs         save_config(repo, &config) -> Result<(), SaveError<E>> (validates, then saves)
 crates/store/         radial-store: TomlConfigRepository::{at_default_location, at, path}; StoreError
 crates/win/           radial-win: `windows` 0.62 + tiny-skia + ab_glyph + thiserror; unsafe in small wrappers with SAFETY notes
-  keys.rs             pure `Key`→VK, `Modifiers`→`MOD_* | MOD_NOREPEAT`, `Modifiers`→poll VKs; unit-tested
+  keys.rs             pure `Key`→VK (mouse buttons map to VK_LBUTTON…VK_XBUTTON2, which
+                      `GetAsyncKeyState` answers for), `Modifiers`→`MOD_* | MOD_NOREPEAT`,
+                      `Modifiers`→poll VKs; unit-tested
+  mouse.rs            `GetAsyncKeyState` sampler, no hook: `pressed_button()`, `modifiers_down()`
+                      (for the settings capture), `is_button_down`/`is_down` (for the input thread)
   hotkey.rs           `Hotkeys`: `RegisterHotKey(None, ..)` on the input thread; the snippet hotkey
                       alternates ids 1/2, new before old is dropped; Esc is id 3; 1409 becomes
-                      `HotkeyError::AlreadyRegistered`
+                      `HotkeyError::AlreadyRegistered`; a `Key::Mouse(_)` binding registers nothing and
+                      only releases the old keyboard hotkey (the input thread watches for its press)
   input.rs            `input::spawn(core) -> InputHandle{tx, thread_id}`; `GetMessageW` loop:
                       `WM_HOTKEY` (id 1/2 → HotkeyPressed, 3 → Cancel), `WM_APP+1` drains the channel,
-                      `WM_TIMER` (SetTimer 10 ms while `wants_ticks`, keeping the returned id for KillTimer, with Esc)
-                      samples cursor, key, modifiers, primary button into `Click` then `Tick`; `quit()` posts `WM_QUIT`
+                      `WM_TIMER` (SetTimer 10 ms) samples cursor, key, modifiers, primary button into
+                      `Click` then `Tick` while `wants_ticks`, or watches for the mouse-button hotkey's
+                      press on its down-edge while idle (watch mode); `sync` keeps the timer running
+                      for either reason and Esc tied to the menu, not the timer; `quit()` posts `WM_QUIT`
   overlay.rs          `Overlay`: window on the input thread (WS_EX_LAYERED|NOACTIVATE|TOPMOST|TOOLWINDOW, WS_POPUP,
                       WM_MOUSEACTIVATE → MA_NOACTIVATE); show: `MonitorFromPoint` + `GetMonitorInfoW` work area,
                       `GetDpiForMonitor` scale, `place` centre, tiny-skia disc/wedges/separators/circles/labels,
                       `UpdateLayeredWindow` over a CreateDIBSection BGRA buffer (DcGuard frees GDI handles),
                       `SW_SHOWNOACTIVATE` + topmost; highlight redraws, hide hides; labels: segoeui.ttf via ab_glyph,
                       `cut_to_fit` to the wedge chord; helpers tested: `wedge_angles`, `rgba_to_bgra`, `cut_to_fit`
+  inject.rs           `ClipboardPaste`: retrying `OpenClipboard` with an RAII close; saves every `HGLOBAL` format
+                      except the GDI ones; `EmptyClipboard`; `CF_UNICODETEXT` as NUL-terminated UTF-16 with CRLF
+                      (`to_utf16_with_crlf`, tested) plus the registered no-history/no-cloud formats; `SendInput`
+                      Ctrl+V (4 of 4 or error; UIPI fails silently); 100 ms later the saved formats go back, but only
+                      if `GetClipboardSequenceNumber` is unchanged
   dpi.rs              `enable_per_monitor_v2()`, called first in `main`
-  inject.rs           stub (M3)
   ../../smoke.ps1     injects a hold-flick-release against the built exe and prints the logs; dev helper for the
                       manual tests, not part of the app
-crates/settings/      radial-settings: run(config, save: FnMut(&Config)->Result<(),String>) -> eframe::Result
+crates/settings/      radial-settings: run(config, save: FnMut(&Config)->Result<(),String>,
+                      sample_mouse: Fn()->Option<(MouseButton, Modifiers)>) -> eframe::Result;
+                      press-to-record hotkey capture (keyboard events + mouse polling, arming guard,
+                      Esc cancels)
 crates/desktop/       radial-paste (bin): composition root; enables Per-Monitor V2 DPI first, env_logger filter "warn,radial=info,wgpu_hal=off";
-                      input::spawn(Core + real hotkeys + overlay) on the "input" thread, settings on the main thread,
-                      which sends ConfigChanged through the InputHandle and quits it when the window closes
+                      input::spawn(Core + real hotkeys + overlay) on the "input" thread, settings on the main thread
+                      (wired to `radial_win::mouse` as its sampler), which sends ConfigChanged through the InputHandle
+                      and quits it when the window closes
 ```
 
 ### How `Core` behaves (already tested)
@@ -134,7 +150,7 @@ crates/desktop/       radial-paste (bin): composition root; enables Per-Monitor 
      - `radial-paste.exe --settings` is the eframe window. It saves the TOML, then posts a registered window message (`RegisterWindowMessageW("radial-paste.reload")`) to the resident's hidden message window. The resident reloads the file and feeds `ConfigChanged`.
    - The resident reports hotkey failures with a tray balloon.
 2. **Units of `Layout`.** Settled for M2, as recommended: `Layout` stays in logical (96-DPI) pixels. `MenuPresenter::show` returns `Placement { centre: Vec2, scale: f64 }` (scale = monitor DPI / 96), and `Core` divides offsets by `scale` before `pick` and `contains`. Done in `ports.rs`, `machine.rs` and the tests.
-3. **egui renderer.** Recommended: `eframe = { default-features = false, features = ["glow", "default_fonts"] }` (check the 0.37 feature names). It is lighter and builds faster.
+3. ~~**egui renderer.**~~ Settled during M5, as recommended: `eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }`. Builds faster and lighter; no wgpu in the tree any more.
 4. **Font for the overlay labels.** Settled for M2, as recommended: `ab_glyph`, loading `C:\Windows\Fonts\segoeui.ttf` at the first `show`. If it is missing, it logs once and draws the ring without labels.
 5. **How much clipboard to restore.** Recommended for v1: every `HGLOBAL`-backed format, skipping GDI-handle formats (`CF_BITMAP`, `CF_ENHMETAFILE`, `CF_METAFILEPICT`, `CF_PALETTE`, owner-display). `CF_DIB` still covers images.
 
@@ -186,30 +202,22 @@ All `unsafe` gets `// SAFETY:` comments. Keep the `windows` calls in small wrapp
 
 Remaining from M2: a human should look at the ring once (geometry, labels, highlight, a HiDPI monitor), and try tap-then-click and Esc against the real overlay.
 
-### M3: paste (`crates/win/inject.rs`) ← next
+### M3: paste (`crates/win/inject.rs`) ← done 2026-10-28
 
-1. Add the features `Win32_System_DataExchange`, `Win32_System_Memory` and `Win32_System_Ole` (for `CF_UNICODETEXT`).
-2. `OpenClipboard(None)`, retrying up to 10 times about 10 ms apart, because other apps hold it briefly. Always close it, using an RAII guard.
-3. Save the clipboard: `EnumClipboardFormats`, and copy each `HGLOBAL` format's bytes (open decision 5).
-4. Set the text:
-   - `EmptyClipboard`.
-   - `SetClipboardData(CF_UNICODETEXT, ..)`: UTF-16 with a NUL terminator, `\n` turned into `\r\n`, in `GlobalAlloc(GMEM_MOVEABLE)`.
-   - Also set the registered formats `ExcludeClipboardContentFromMonitorProcessing` (empty), `CanIncludeInClipboardHistory` (DWORD 0) and `CanUploadToCloudClipboard` (DWORD 0).
-   - Remember `GetClipboardSequenceNumber()`.
-5. `SendInput`: Ctrl down, V down, V up, Ctrl up. If fewer than 4 events were inserted, return an error. UIPI blocking is *not* reported, so it fails silently. Later, detect an elevated foreground window and warn.
-6. Wait about 100 ms, then restore the saved formats, but only if the sequence number hasn't changed (so you don't wipe something the user copied in between). For v1 a blocking sleep on the input thread is acceptable, since the core is Idle; a timer-driven restore can come later.
-7. Pure helpers to unit-test: CRLF conversion and UTF-16 encoding.
-8. Manual matrix:
-   - Notepad
-   - VS Code
-   - Chrome text field
-   - Word
-   - Windows Terminal (expect failure: paste there is Ctrl+Shift+V)
-   - Elevated cmd (expect a silent failure from UIPI)
-   - Check that Win+V history doesn't show the snippet.
-   - Check that an image on the clipboard survives.
+1. ~~Features~~ Done: `Win32_System_DataExchange`, `Win32_System_Memory`, `Win32_System_Ole`.
+2. ~~Retrying open with RAII close~~ Done (10 × 10 ms).
+3. ~~Save the clipboard~~ Done: every `HGLOBAL` format, GDI formats skipped (open decision 5 adopted).
+4. ~~Set the text~~ Done, plus the three exclusion formats and the sequence number.
+5. ~~`SendInput` Ctrl+V~~ Done, counting 4 of 4.
+6. ~~Restore~~ Done, guarded by the sequence number. In the smoke run the sequence moved 115 → 118, so something on this machine rewrites the clipboard right after a paste; the restore correctly stayed out. Worth identifying that writer some day.
+7. ~~Pure helpers tested~~ Done: `to_utf16_with_crlf`.
+8. Manual matrix: NOT DONE by a human. Notepad ✓ via the smoke script; still to try: VS Code, Chrome, Word, Windows Terminal (expected Ctrl+Shift+V failure), elevated cmd (expected UIPI silence), Win+V history, an image surviving.
 
-### M4: tray, lifetime, single instance, autostart
+Root-caused the same day, from a manual run: `SetClipboardData` rejected the zero-size `GMEM_MOVEABLE` block for the empty exclusion marker - a *discarded* handle - and failed with the stale "The operation completed successfully" error. The old code swallowed that failure, so the marker had never actually been set. Fixed: empty formats carry one zero byte, every failing operation is named in `PasteError` (`SetFormat { format }` and friends), the replacement phase retries 3 × 50 ms against busy clipboard owners, and a failed paste now restores the saved formats instead of leaving the clipboard wiped.
+
+### M4: tray, lifetime, single instance, autostart ← next
+
+(Skipped ahead of for one day by M5, at the user's call.)
 
 1. Settle open decision 1. The rest of this assumes the recommended two-process split.
 2. Resident mode (no arguments):
@@ -222,21 +230,30 @@ Remaining from M2: a human should look at the ring once (geometry, labels, highl
 4. Autostart: when the config loads or reloads, sync `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `radial-paste` = `"<exe path>"`, or delete it. Use the `windows` registry API or the `winreg` crate.
 5. Remove the "not wired up yet" note from the autostart checkbox.
 
-### M5: polish and shipping
+### M5: polish and shipping ← done 2026-10-28, with leftovers
 
-- Embed an app manifest and icon (`embed-resource` or `winresource`): Per-Monitor V2 DPI, `asInvoker`, Common Controls v6.
-- Log to a file under `%LOCALAPPDATA%\radial-paste\logs` in release builds, because `windows_subsystem = "windows"` hides the console.
-- If `config.toml` fails to load, keep a copy as `config.toml.bad` before the defaults overwrite it.
-- Switch eframe to glow (open decision 3).
-- Installer with `cargo-wix` (MSI). Code-sign the exe and the MSI, because of SmartScreen and antivirus heuristics on `SendInput`.
-- CI on GitHub Actions `windows-latest`: fmt, clippy `-D warnings`, test, and a release build uploaded as an artifact.
+- ~~Embed an app manifest and icon~~ Done: `crates/desktop/build.rs` with `winresource`, `assets/app.manifest` (Per-Monitor V2, `asInvoker`, Common Controls v6) and `assets/app.ico`, regenerated by `assets/make-icon.ps1` (three BMP sizes plus one PNG-compressed 256x256). Verified inside the built exe.
+- ~~Log to a file in release builds~~ Done: `crates/desktop/src/logging.rs` - `env_logger` on the console in debug, one file per run under `%LOCALAPPDATA%\radial-paste\logs` in release (env_filter parsing, Hinnant's date maths, the 5 newest kept). Tested: the two date-format tests run in debug builds too.
+- ~~`config.toml.bad`~~ Done: on any load error `desktop/main.rs` copies the file next to the original before the defaults take over.
+- ~~Switch eframe to glow~~ Done; open decision 3 closed.
+- ~~CI~~ Done: `.github/workflows/ci.yml` (windows-latest: fmt, clippy `-D warnings`, test, release exe as artifact). Has never run - it runs on the first push.
+- ~~Installer~~ Template only: `wix/main.wxs` (per-user MSI, perMachine-free, UpgradeCode fixed). Not built here: needs the WiX 3.x toolset (`cargo install cargo-wix`). See README "Packaging".
+- Code-signing: NOT DONE, needs a certificate. Until then SmartScreen and antivirus heuristics on `SendInput` stay a risk (§7).
+
+Code-review fixes applied the same day (both reviewers' should-fixes and most nits):
+- `inject.rs`: a failed `SendInput` now restores the clipboard instead of leaving the snippet on it; the restore re-checks the sequence number after its open retries; `PasteError::SendInput` carries `GetLastError`; four missing SAFETY comments; the `CF_DSP*` formats are skipped explicitly; no `saved.clone()` in staging.
+- `overlay.rs`: the class-name `HSTRING` was dangling by the time `RegisterClassW`/`CreateWindowExW` ran (pre-existing M2 bug, worked by luck); it is now bound to a local.
+- `input.rs`: a second press of a mouse-button hotkey now closes the menu like the keyboard hotkey's repeat does - the combo edge is watched on every tick, not only while idle; stale `WM_TIMER`s after `KillTimer` are ignored.
+- `mouse.rs`: `pressed_button` asks the standalone-legal buttons first, so a stray chord records the likelier intent.
+- `settings`: the arming guard now also waits for every mouse button to be seen up, not only for the 250 ms.
+- `hotkey.rs`: the unused `Hotkeys::current` is gone; `smoke.ps1` says it hardcodes the hotkey; `smoke-err.log` is ignored.
 
 ### Later (not v1)
 
 - More than 8 snippets: two rings (distance picks the ring) or pages (mouse wheel). Both are only layout functions in `domain::layout`, plus validation limits.
 - Typing the text with `SendInput` + `KEYEVENTF_UNICODE` as a per-snippet paste method, which leaves the clipboard alone.
 - Placeholders: `{date}`, `{time}`, `{clipboard}`, and a cursor position after the paste.
-- A mouse-button trigger. This needs `WH_MOUSE_LL`; ask first, per `AGENTS.md`.
+- Swallow the mouse-button hotkey's press (it currently also reaches the focused app). This would need `WH_MOUSE_LL`; ask first, per `AGENTS.md`.
 - Import and export of snippets.
 
 ## 7. Risks to keep in mind
@@ -251,8 +268,8 @@ Remaining from M2: a human should look at the ring once (geometry, labels, highl
 
 ## 8. Next step
 
-Start **M3** (`crates/win/inject.rs`): clipboard save, `CF_UNICODETEXT` with the history-exclusion formats, `SendInput` Ctrl+V, sequence-number-checked restore. Add the `Win32_System_DataExchange`, `Win32_System_Memory` and `Win32_System_Ole` features. Before that, a human should eyeball the overlay once: run the app, hold the hotkey, and check the ring, the labels, the highlight, tap-then-click and Esc.
+Start **M4** (tray, lifetime, single instance, autostart). Step 1 is settling open decision 1 (settings in-process or as a second process); the recommendation is the two-process split, which reshapes `desktop/main.rs` first. Before that, a human should run the M3 manual matrix, look at the overlay and the new app icon once, and try a mouse-button hotkey (`Record keys…`, hold the side button, flick, release).
 
-Don't commit until the user asks. Nothing is committed yet, so offer an initial commit (`chore: scaffold workspace`) first.
+The M3 work and the mouse/capture feature are not committed yet; `feat(win): paste through the clipboard` and `feat(win): poll mouse-button hotkeys and record them in settings` (or two commits split the same way) would fit.
 
 Checks before finishing any change: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
