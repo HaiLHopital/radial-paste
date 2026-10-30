@@ -246,10 +246,7 @@ impl<S: FnMut(&Config) -> Result<(), String>, M: Fn() -> Option<(MouseButton, Mo
             );
             ui.end_row();
         });
-        ui.checkbox(
-            &mut self.draft.autostart,
-            "Start with Windows (not wired up yet)",
-        );
+        ui.checkbox(&mut self.draft.autostart, "Start with Windows");
     }
 
     fn snippets_ui(&mut self, ui: &mut egui::Ui) {

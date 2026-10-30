@@ -6,13 +6,16 @@
 use windows::Win32::Foundation::GetLastError;
 use windows::core::{Error as WinError, HRESULT};
 
+pub mod autostart;
 pub mod dpi;
+pub mod host;
 pub mod hotkey;
 pub mod inject;
 pub mod input;
 pub mod keys;
 pub mod mouse;
 pub mod overlay;
+pub mod tray;
 
 /// The calling thread's last Win32 error, as a typed error.
 pub(crate) fn last_error() -> WinError {

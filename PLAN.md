@@ -29,13 +29,13 @@ A Windows tray app. You hold a global hotkey and a ring of up to 8 text snippets
 
 ## 3. Current state
 
-M1, M2 and M3 are done: hotkey, input loop, overlay and paste are all real. On top of that, the settings window can record the hotkey by pressing it, and mouse buttons work as the hotkey's key (polled in watch mode, no hook). M5 (polish and shipping) is also done, at the user's call to skip ahead of M4: manifest + icon, release file logging, the `config.toml.bad` backup, eframe on glow, a CI workflow and an MSI template. The two code reviews from the same day are applied (see §6, M3 and M5). Committed so far: `79accd8 feat: initial workspace through milestone M2`; everything since is not committed yet.
+M1 through M5 are done. The app is a resident background process: it lives in the tray (Settings…, Pause, Quit), a second launch opens the settings window of the running copy, `--settings` starts a settings-only process whose saves are reloaded live, and the `autostart` checkbox is wired to the registry Run key. The settings window can record the hotkey by pressing it, and mouse buttons work as the hotkey's key (polled in watch mode, no hook). Committed so far: `79accd8` (through M2), `c20007f feat(win): clipboard paste and mouse hotkeys`, `75d2c4e feat: press-to-record capture and M5 polish`; M4 is not committed yet.
 
 Verified on 2026-10-28:
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` are clean.
-- `cargo test --workspace` passes 62 tests: 25 in domain, 15 in app, 14 in win (6 `keys`, 5 overlay helpers, 3 UTF-16/CRLF), 2 in settings, 2 in the desktop's logging module, 4 in store.
+- `cargo test --workspace` passes 64 tests: 25 in domain, 15 in app, 16 in win (6 `keys`, 5 overlay helpers, 3 UTF-16/CRLF, 2 `autostart`), 2 in settings, 2 in the desktop's logging module, 4 in store. One `autostart` test writes and removes the real per-user Run key.
 - `cargo check --release` builds the release-only code paths (file logger, glow). The icon and manifest are confirmed inside the built exe: `ExtractAssociatedIcon` extracts a 32x32 icon, and the bytes carry `PerMonitorV2`, `asInvoker` and the Common-Controls dependency.
-- An injected hold-flick-release (`smoke.ps1`) with Notepad focused pasted the picked snippet into it and sent Ctrl+V for real. The clipboard was NOT restored in that run: the sequence number moved 115 → 118 within the 100 ms read delay, so something on this machine rewrites the clipboard after a paste (a clipboard manager or an OS service). The guard treated it as a foreign write and left the snippet on the clipboard, which matches the recorded decision that a clobbered clipboard is acceptable. What still needs human eyes: the manual matrix in M3 step 8 (terminals and elevated windows are expected failures), tap-then-click, Esc, the ring's looks, and whether the clipboard restores on a quieter machine or after identifying the writer. Not yet tried by a human: a mouse-button hotkey end to end (set `hotkey = "MouseBack"` in the settings window and hold-flick-release), and the looks of the app icon.
+- The resident was smoke-tested live on 2026-10-29: one process stays in the tray with no window; a second launch exits and makes the resident spawn a `--settings` child; with `autostart = false` the Run key correctly carries no entry. What still needs human eyes: the tray menu itself (Settings…, Pause, Quit), double-click, the hotkey surviving a settings save, and the manual matrices from M3 (terminals and elevated windows are expected failures, tap-then-click, Esc, the ring's looks) plus a mouse-button hotkey end to end.
 
 Toolchain at the time:
 - Rust 1.99, edition 2024, resolver 3.
@@ -57,11 +57,11 @@ What works:
 - The paste: clipboard save (every `HGLOBAL` format except the GDI ones), `CF_UNICODETEXT` in UTF-16 with CRLF, the three registered exclusion formats (no Win+V history, no cloud clipboard), retrying open with an RAII close, `SendInput` Ctrl+V counting 4 of 4, sequence-number-checked restore after 100 ms.
 
 Known gaps:
-- No tray icon. Closing the settings window quits (via `InputHandle::quit`).
-- `autostart` is stored but not applied.
-- Hotkey registration errors are only logged.
+- A second `--settings` process is not prevented, and an already-open settings window is not brought to the front; two windows would race on save, last save wins.
+- Hotkey registration errors are only logged (no tray balloon).
 - The MSI has never been built on this machine (no WiX toolset), and nothing is code-signed.
-- The overlay's looks, the app icon and the paste matrix have only been checked by the injected smoke script, not by a human at the keyboard.
+- The overlay's looks, the app icon, the tray menu and the paste matrix have only been checked by the injected smoke script and the live resident probe, not fully by a human at the keyboard.
+- `smoke.ps1` still drives the old single-process flow (its `Start-Process` now becomes a second instance that opens settings); it needs a small rewrite against the resident.
 
 ## 4. Code map
 
@@ -114,16 +114,33 @@ crates/win/           radial-win: `windows` 0.62 + tiny-skia + ab_glyph + thiser
                       Ctrl+V (4 of 4 or error; UIPI fails silently); 100 ms later the saved formats go back, but only
                       if `GetClipboardSequenceNumber` is unchanged
   dpi.rs              `enable_per_monitor_v2()`, called first in `main`
+  autostart.rs        the `autostart` setting applied to `HKCU\...\Run`: quoted exe path as REG_SZ,
+                      removed when off (a missing entry is not an error); integration-tested against
+                      the real key, which it leaves as it was
+  host.rs             the resident's plumbing: `try_acquire` takes the single-instance mutex
+                      (`Local\radial-paste`, `AlreadyRunning` for the second launch),
+                      `notify_reload`/`notify_open_settings` find the message-only window by class
+                      and post registered messages, `run_host` creates that window
+                      (`HWND_MESSAGE`, class `radial-paste.host`) and pumps the loop on the calling
+                      thread until the pump asks to quit
+  tray.rs             `Tray`: menu Settings… / Pause (checkbox) / separator / Quit, icon from the
+                      exe's resource (id 1) with a hand-drawn fallback, menu on right-click only,
+                      double-click opens settings; `drain` turns both muda channels into `Command`s
   ../../smoke.ps1     injects a hold-flick-release against the built exe and prints the logs; dev helper for the
-                      manual tests, not part of the app
+                      manual tests, not part of the app (needs a rewrite for the resident)
 crates/settings/      radial-settings: run(config, save: FnMut(&Config)->Result<(),String>,
                       sample_mouse: Fn()->Option<(MouseButton, Modifiers)>) -> eframe::Result;
                       press-to-record hotkey capture (keyboard events + mouse polling, arming guard,
-                      Esc cancels)
-crates/desktop/       radial-paste (bin): composition root; enables Per-Monitor V2 DPI first, env_logger filter "warn,radial=info,wgpu_hal=off";
-                      input::spawn(Core + real hotkeys + overlay) on the "input" thread, settings on the main thread
-                      (wired to `radial_win::mouse` as its sampler), which sends ConfigChanged through the InputHandle
-                      and quits it when the window closes
+                      Esc cancels); on glow instead of wgpu
+crates/desktop/       radial-paste (bin): composition root with two modes:
+                      no arguments → resident: single-instance mutex, load config (+ backup + autostart),
+                      input::spawn(Core + real hotkeys + overlay), tray on the main thread, then
+                      host::run_host — a Reload message re-reads the file, re-applies autostart and
+                      feeds ConfigChanged; OpenSettings or a tray double-click spawns `current_exe() --settings`;
+                      Pause feeds SetPaused; Quit quits the input thread and the loop
+                      `--settings` → the eframe window (wired to `radial_win::mouse` as its sampler);
+                      its save closure writes the file and posts the reload message; also embeds icon and
+                      manifest via build.rs and installs the release file logger
 ```
 
 ### How `Core` behaves (already tested)
@@ -143,12 +160,7 @@ crates/desktop/       radial-paste (bin): composition root; enables Per-Monitor 
 
 ## 5. Open decisions (settle these before building the relevant part)
 
-1. **Settings in-process or as a second process.** This matters at M4.
-   - Problem: `eframe::run_native` can only run once per process, because a winit `EventLoop` can't be recreated. So a resident tray app can't close and reopen the window cheaply. Keeping eframe alive with a hidden window costs about 100 MB with wgpu, and a hidden window may stop calling `ui`.
-   - **Recommended:** two modes of one exe.
-     - `radial-paste.exe` stays resident: tray, input thread and overlay, no egui.
-     - `radial-paste.exe --settings` is the eframe window. It saves the TOML, then posts a registered window message (`RegisterWindowMessageW("radial-paste.reload")`) to the resident's hidden message window. The resident reloads the file and feeds `ConfigChanged`.
-   - The resident reports hotkey failures with a tray balloon.
+1. ~~**Settings in-process or as a second process.**~~ Settled during M4, as recommended: the two-process split. The resident (no arguments) never links eframe; `--settings` runs the eframe window in its own process and posts `radial-paste.reload` to the resident's message-only window. The eframe-restart problem disappears, and closing settings no longer quits the app.
 2. **Units of `Layout`.** Settled for M2, as recommended: `Layout` stays in logical (96-DPI) pixels. `MenuPresenter::show` returns `Placement { centre: Vec2, scale: f64 }` (scale = monitor DPI / 96), and `Core` divides offsets by `scale` before `pick` and `contains`. Done in `ports.rs`, `machine.rs` and the tests.
 3. ~~**egui renderer.**~~ Settled during M5, as recommended: `eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }`. Builds faster and lighter; no wgpu in the tree any more.
 4. **Font for the overlay labels.** Settled for M2, as recommended: `ab_glyph`, loading `C:\Windows\Fonts\segoeui.ttf` at the first `show`. If it is missing, it logs once and draws the ring without labels.
@@ -215,20 +227,21 @@ Remaining from M2: a human should look at the ring once (geometry, labels, highl
 
 Root-caused the same day, from a manual run: `SetClipboardData` rejected the zero-size `GMEM_MOVEABLE` block for the empty exclusion marker - a *discarded* handle - and failed with the stale "The operation completed successfully" error. The old code swallowed that failure, so the marker had never actually been set. Fixed: empty formats carry one zero byte, every failing operation is named in `PasteError` (`SetFormat { format }` and friends), the replacement phase retries 3 × 50 ms against busy clipboard owners, and a failed paste now restores the saved formats instead of leaving the clipboard wiped.
 
-### M4: tray, lifetime, single instance, autostart ← next
+### M4: tray, lifetime, single instance, autostart ← done 2026-10-29, with leftovers
 
-(Skipped ahead of for one day by M5, at the user's call.)
+Done, on the recommended two-process split (open decision 1 settled):
 
-1. Settle open decision 1. The rest of this assumes the recommended two-process split.
-2. Resident mode (no arguments):
-   - Single instance: create the named mutex `CreateMutexW("Local\\radial-paste")`. If it already exists, post the reload/open message to the running copy and exit.
-   - A hidden message-only window (`HWND_MESSAGE`) on the input thread receives `radial-paste.reload` and `radial-paste.open-settings`.
-   - Tray (`tray-icon` + `muda`) on the input thread, which already has a message loop. Menu items: Settings…, Pause (checkbox → `Event::SetPaused`), Quit (`WM_QUIT`). Double-clicking the icon opens settings.
-   - Settings… starts `current_exe() --settings`, unless a settings window is already open: then bring it to the front, e.g. by checking with a second named mutex.
-   - On reload: `repo.load()`, then `ConfigChanged`. Show any `CoreError` as a tray balloon.
-3. Settings mode (`--settings`): today's `radial_settings::run`. Its `save` closure does `save_config`, then `PostMessageW(FindWindowExW(HWND_MESSAGE, .., class), reload_msg)`. It does not need the input thread.
-4. Autostart: when the config loads or reloads, sync `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `radial-paste` = `"<exe path>"`, or delete it. Use the `windows` registry API or the `winreg` crate.
-5. Remove the "not wired up yet" note from the autostart checkbox.
+- ~~Single instance~~ Done: `CreateMutexW("Local\radial-paste")` in `radial_win::host::try_acquire`; the second launch notifies `open-settings` and exits, which makes the resident open the settings window.
+- ~~Message-only window~~ Done: `radial_win::host::run_host` creates it on the resident's main thread (not the input thread, as the plan guessed — the tray wants that thread too), receives `radial-paste.reload` and `radial-paste.open-settings`, and its loop doubles as the pump for the tray's event channels.
+- ~~Tray~~ Done: `radial_win::tray` (tray-icon 0.26 + its bundled muda) with Settings…, Pause (checkbox → `Event::SetPaused`), separator, Quit. Quit ends the input thread and the host loop. Double-click opens settings; the menu is right-click only (`with_menu_on_left_click(false)`). The icon comes from the exe's resource (id 1, embedded by M5's winresource) with a hand-drawn fallback.
+- ~~Settings mode (`--settings`)~~ Done: the save closure writes the file and posts `reload`. Works with or without a resident; without one only the file is written.
+- ~~Autostart~~ Done: `radial_win::autostart::set` writes/removes `HKCU\...\Run` value `radial-paste` (quoted exe path, REG_SZ), applied on load and on every reload; integration-tested against the real key. The checkbox label no longer says "not wired up yet".
+
+Deviations and leftovers:
+- **No tray balloon** for a failed hotkey change; errors are still only logged.
+- **No second-settings guard**: two `--settings` processes can run at once and race on save (last save wins); the plan's bring-to-front mutex was skipped.
+- The tray is on the main thread, not the input thread as planned — same effect, and it keeps the policy (reload, spawn, autostart) out of `radial-win`'s input loop.
+- `smoke.ps1` still drives the pre-M4 single-process flow and needs a rewrite.
 
 ### M5: polish and shipping ← done 2026-10-28, with leftovers
 
@@ -268,8 +281,8 @@ Code-review fixes applied the same day (both reviewers' should-fixes and most ni
 
 ## 8. Next step
 
-Start **M4** (tray, lifetime, single instance, autostart). Step 1 is settling open decision 1 (settings in-process or as a second process); the recommendation is the two-process split, which reshapes `desktop/main.rs` first. Before that, a human should run the M3 manual matrix, look at the overlay and the new app icon once, and try a mouse-button hotkey (`Record keys…`, hold the side button, flick, release).
+All of M1–M5 is implemented; v1 now needs human validation, not code: run the M3 manual matrix (terminals and elevated windows are expected failures, tap-then-click, Esc, the ring's looks), try a mouse-button hotkey end to end, and try the resident's tray (Settings…, Pause, Quit, double-click) plus a settings save with the hotkey armed. After that: build the MSI once the WiX toolset is installed, and code-sign when a certificate exists. `smoke.ps1` wants a rewrite against the resident.
 
-The M3 work and the mouse/capture feature are not committed yet; `feat(win): paste through the clipboard` and `feat(win): poll mouse-button hotkeys and record them in settings` (or two commits split the same way) would fit.
+The M4 work (tray, host window, autostart, the two-mode `main`) is not committed yet; `feat: resident tray, single instance and autostart` would fit.
 
 Checks before finishing any change: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.

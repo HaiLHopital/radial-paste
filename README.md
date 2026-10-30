@@ -6,7 +6,11 @@ Windows 10 and 11 only.
 
 ## Status
 
-Work in progress. Milestones M1 through M3 and M5 are done; M4 (tray, single instance, autostart) is next. The model, the menu's state machine, the TOML settings file, the settings window, the global hotkey, the input loop, the radial overlay and the clipboard paste all work and are tested. The hotkey can be recorded by pressing it in the settings window, and mouse buttons can be the hotkey's key. Release builds carry an icon, a manifest (Per-Monitor V2 DPI, `asInvoker`, Common Controls), file logging under `%LOCALAPPDATA%\radial-paste\logs`, and CI runs the checks on GitHub Actions.
+Work in progress. Milestones M1 through M5 are done; what remains for v1 is human validation, the MSI build (needs the WiX toolset) and code-signing.
+
+Run the exe with no arguments and it stays in the background: a tray icon (right-click: Settings…, Pause, Quit) with the global hotkey live. Launching it again while it runs opens the settings window of the running copy; `--settings` opens one directly. Saving in the settings window applies the changes live — the settings window runs in its own process and the resident re-reads the file. Closing the settings window does not quit the app; Quit in the tray menu does.
+
+The **Start with Windows** checkbox writes/removes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\radial-paste`, pointing at the running exe. The hotkey can be recorded by pressing it in the settings window, and mouse buttons can be the hotkey's key. Release builds carry an icon and a manifest (Per-Monitor V2 DPI, `asInvoker`, Common Controls) and log one file per run under `%LOCALAPPDATA%\radial-paste\logs`.
 
 ## Scope
 
@@ -34,11 +38,11 @@ Hexagonal, as a Cargo workspace:
 | `crates/domain` (`radial-domain`) | Pure model: `Snippet`, `Config`, `HotkeyBinding`, `Layout` (which wedge an offset points into). No I/O. |
 | `crates/app` (`radial-app`) | Use cases and ports. `Core` is the menu's state machine; `save_config` validates and saves. The ports are `ConfigRepository`, `MenuPresenter`, `TextInjector` and `HotkeyRegistrar`. |
 | `crates/store` (`radial-store`) | `ConfigRepository` stored as TOML. |
-| `crates/win` (`radial-win`) | Windows adapters and the input thread. |
+| `crates/win` (`radial-win`) | Windows adapters and the input thread: hotkey, overlay, paste, mouse sampling, the tray, autostart and the resident's single-instance mutex and message-only window. |
 | `crates/settings` (`radial-settings`) | The egui settings window. |
 | `crates/desktop` (`radial-paste`) | The binary and composition root: it also embeds the icon and the manifest and installs the release file logger. |
 
-The input thread owns the hotkey, the overlay and the `Core`. It feeds the core `Event`s: `HotkeyPressed`, and `Tick`s that sample the cursor and the keys every 10 ms while the menu is up. The settings window runs on the main thread and sends `ConfigChanged` over a channel.
+The input thread owns the hotkey, the overlay and the `Core`. It feeds the core `Event`s: `HotkeyPressed`, and `Tick`s that sample the cursor and the keys every 10 ms while the menu is up or while a mouse-button hotkey is watched. The resident's main thread owns the tray and a message-only window: `--settings` processes save the config and post a reload message to it, and the resident feeds `ConfigChanged` to the core over a channel.
 
 Key decisions:
 - **The key is polled, not hooked.** `RegisterHotKey` reports the key going down. While the menu is up, `GetAsyncKeyState` polling detects the release. There is no `WH_KEYBOARD_LL` hook, because antivirus software flags hooks as keylogger behaviour. A mouse button cannot be registered, so the input thread polls for its press while idle; the press is not swallowed, which is why the middle, back and forward buttons are the sane picks.
