@@ -363,6 +363,7 @@ mod tests {
             layout: Layout {
                 dead_zone: 20.0,
                 radius: 140.0,
+                font_size: 14.0,
             },
             modifier_release_timeout_ms: 300,
             snippets: ["a", "b", "c", "d"]

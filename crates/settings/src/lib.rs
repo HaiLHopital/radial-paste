@@ -245,6 +245,13 @@ impl<S: FnMut(&Config) -> Result<(), String>, M: Fn() -> Option<(MouseButton, Mo
                     .suffix(" ms"),
             );
             ui.end_row();
+            ui.label("Label size");
+            ui.add(
+                egui::Slider::new(&mut layout.font_size, 8.0..=32.0)
+                    .suffix(" px")
+                    .step_by(1.0),
+            );
+            ui.end_row();
         });
         ui.checkbox(&mut self.draft.autostart, "Start with Windows");
     }

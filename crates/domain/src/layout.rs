@@ -48,6 +48,8 @@ pub struct Layout {
     pub dead_zone: f64,
     /// The ring's outer edge. A click beyond it closes the menu; a flick beyond it still picks.
     pub radius: f64,
+    /// The height of the wedge labels, in logical pixels.
+    pub font_size: f64,
 }
 
 impl Default for Layout {
@@ -55,6 +57,7 @@ impl Default for Layout {
         Self {
             dead_zone: 24.0,
             radius: 140.0,
+            font_size: 14.0,
         }
     }
 }
@@ -65,6 +68,8 @@ impl Layout {
             && self.radius.is_finite()
             && self.dead_zone >= 0.0
             && self.radius > self.dead_zone
+            && self.font_size.is_finite()
+            && (1.0..=64.0).contains(&self.font_size)
     }
 
     /// The wedge, out of `count`, that `offset` from the centre points into. `None` in the dead
@@ -127,6 +132,7 @@ mod tests {
     const LAYOUT: Layout = Layout {
         dead_zone: 20.0,
         radius: 100.0,
+        font_size: 14.0,
     };
 
     #[test]
@@ -180,21 +186,52 @@ mod tests {
         assert!(
             !Layout {
                 dead_zone: 50.0,
-                radius: 50.0
+                radius: 50.0,
+                font_size: 14.0
             }
             .is_valid()
         );
         assert!(
             !Layout {
                 dead_zone: -1.0,
-                radius: 50.0
+                radius: 50.0,
+                font_size: 14.0
             }
             .is_valid()
         );
         assert!(
             !Layout {
                 dead_zone: 0.0,
-                radius: f64::NAN
+                radius: f64::NAN,
+                font_size: 14.0
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn the_font_size_stays_sane() {
+        assert!(
+            !Layout {
+                dead_zone: 20.0,
+                radius: 100.0,
+                font_size: 0.0
+            }
+            .is_valid()
+        );
+        assert!(
+            !Layout {
+                dead_zone: 20.0,
+                radius: 100.0,
+                font_size: 100.0
+            }
+            .is_valid()
+        );
+        assert!(
+            !Layout {
+                dead_zone: 20.0,
+                radius: 100.0,
+                font_size: f64::NAN
             }
             .is_valid()
         );

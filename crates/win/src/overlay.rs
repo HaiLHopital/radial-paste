@@ -39,8 +39,6 @@ use windows::core::{Error as WinError, HSTRING, PCWSTR};
 const FONT_PATH: &str = "C:\\Windows\\Fonts\\segoeui.ttf";
 /// The class and window title of the overlay.
 const CLASS_NAME: &str = "radial-paste overlay";
-/// The height of the labels, in logical pixels.
-const LABEL_PX: f32 = 14.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OverlayError {
@@ -485,7 +483,8 @@ fn draw_labels(pixmap: &mut Pixmap, data: &[u8], frame: &Frame, centre: (f32, f3
         log::warn!("could not parse the overlay font; drawing without labels");
         return;
     };
-    let scaled = font.as_scaled(PxScale::from(LABEL_PX * scale));
+    let label_px = frame.layout.font_size as f32;
+    let scaled = font.as_scaled(PxScale::from(label_px * scale));
     let factor = scaled.scale_factor();
     let count = frame.snippets.len();
     for (index, snippet) in frame.snippets.iter().enumerate() {
@@ -496,7 +495,7 @@ fn draw_labels(pixmap: &mut Pixmap, data: &[u8], frame: &Frame, centre: (f32, f3
         );
         // The chord through the label's radius is the widest the wedge can show.
         let chord = 2.0 * offset.length() as f32 * (PI / count as f32).sin();
-        let max_width = (chord - 10.0 * scale).max(LABEL_PX * scale);
+        let max_width = (chord - 10.0 * scale).max(label_px * scale);
         let text = cut_to_fit(&snippet.label, max_width, |c| {
             scaled.h_advance(scaled.glyph_id(c))
         });

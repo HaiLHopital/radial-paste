@@ -74,8 +74,9 @@ crates/domain/      radial-domain: pure, forbid(unsafe)
                       Key{Letter,Digit,F,Space,Backquote,Mouse(MouseButton)}; HotkeyBinding (valid by construction,
                       FromStr/Display "Ctrl+Shift+Space" / "Ctrl+MouseBack", serde as string); HotkeyError
                       (letters/digits/Space/Backquote and Mouse::Left/Right need Ctrl or Alt)
-  layout.rs           Vec2 (Sub, Div<f64>); Layout{dead_zone,radius} in logical 96-DPI pixels: pick(count, offset)
-                      (wedge 0 at 12 o'clock, clockwise), contains(offset), label_offset(count, i), is_valid();
+  layout.rs           Vec2 (Sub, Div<f64>); Layout{dead_zone,radius,font_size} in logical 96-DPI pixels:
+                      pick(count, offset) (wedge 0 at 12 o'clock, clockwise), contains(offset),
+                      label_offset(count, i), is_valid();
                       Rect + place(cursor, area, radius) moves the centre inward, never panics
 crates/app/           radial-app: depends on domain only, forbid(unsafe)
   ports.rs            ConfigRepository, MenuPresenter{show(cursor,..)->Placement{centre, scale}, highlight, hide},
